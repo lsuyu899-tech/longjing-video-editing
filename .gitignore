@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+
+uploads/
+outputs/
+work/
+logs/
+downloads/
+asset_manifest.json
+
+test_media/
+test_downloads/

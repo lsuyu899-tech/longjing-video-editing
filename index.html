@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>批量混剪</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <svg class="icon-sprite" aria-hidden="true">
+      <symbol id="icon-play" viewBox="0 0 24 24">
+        <path d="m8 5 11 7-11 7z" />
+      </symbol>
+      <symbol id="icon-upload" viewBox="0 0 24 24">
+        <path d="M12 3v12m0-12 4 4m-4-4-4 4M5 15v3a3 3 0 0 0 3 3h8a3 3 0 0 0 3-3v-3" />
+      </symbol>
+      <symbol id="icon-trash" viewBox="0 0 24 24">
+        <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" />
+      </symbol>
+      <symbol id="icon-left" viewBox="0 0 24 24">
+        <path d="m12 19-7-7 7-7M19 12H5" />
+      </symbol>
+      <symbol id="icon-right" viewBox="0 0 24 24">
+        <path d="m12 5 7 7-7 7M5 12h14" />
+      </symbol>
+      <symbol id="icon-download" viewBox="0 0 24 24">
+        <path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14" />
+      </symbol>
+      <symbol id="icon-plus" viewBox="0 0 24 24">
+        <path d="M12 5v14M5 12h14" />
+      </symbol>
+    </svg>
+
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-mark"><svg><use href="#icon-play" /></svg></span>
+        <strong>批量混剪</strong>
+        <span><b id="top-output-count">1</b> 支成片，<b id="top-asset-count">0</b> 个素材已导入</span>
+      </div>
+      <time id="clock">--:--:--</time>
+    </header>
+
+    <main class="workspace">
+      <section class="step-section">
+        <div class="step-head">
+          <span class="step-index">1</span>
+          <strong>选择成片风格</strong>
+          <span>当前只开放一个混剪风格，后续可继续增加模板</span>
+        </div>
+        <div class="style-grid">
+          <button class="style-card active" type="button" data-style="simple">
+            <div class="style-top">
+              <strong>简单拼接</strong>
+              <span>使用中</span>
+            </div>
+            <p>按成片轨道从左到右直接拼接，适合先把基础出片流程跑通</p>
+            <div class="bar-chart" aria-hidden="true">
+              <i style="height: 38%"></i><i style="height: 72%"></i><i style="height: 46%"></i><i style="height: 64%"></i><i style="height: 52%"></i><i style="height: 82%"></i>
+            </div>
+            <footer><span>模板顺序</span></footer>
+          </button>
+
+          <button class="style-card disabled" type="button" disabled>
+            <strong>口播环境混剪</strong>
+            <p>后续接入：口播为主线，环境素材穿插补画面</p>
+            <div class="bar-chart muted" aria-hidden="true">
+              <i style="height: 44%"></i><i style="height: 44%"></i><i style="height: 62%"></i><i style="height: 44%"></i><i style="height: 50%"></i>
+            </div>
+            <footer><span>待开放</span><span>--</span></footer>
+          </button>
+
+          <button class="style-card disabled" type="button" disabled>
+            <strong>快切节奏</strong>
+            <p>后续扩展：环境素材高频切换</p>
+            <div class="bar-chart muted" aria-hidden="true">
+              <i style="height: 70%"></i><i style="height: 38%"></i><i style="height: 54%"></i><i style="height: 78%"></i><i style="height: 42%"></i>
+            </div>
+            <footer><span>待开放</span><span>--</span></footer>
+          </button>
+
+          <button class="style-card disabled" type="button" disabled>
+            <strong>大字观点</strong>
+            <p>后续扩展：标题型字幕和观点卡片</p>
+            <div class="bar-chart muted" aria-hidden="true">
+              <i style="height: 48%"></i><i style="height: 56%"></i><i style="height: 44%"></i><i style="height: 68%"></i><i style="height: 68%"></i>
+            </div>
+            <footer><span>待开放</span><span>--</span></footer>
+          </button>
+        </div>
+      </section>
+
+      <section class="step-section">
+        <div class="step-head">
+          <span class="step-index">2</span>
+          <strong>素材池</strong>
+          <span>素材池只负责存放素材，拖入下方成片轨道后才决定剪辑顺序</span>
+        </div>
+        <div class="pool-toolbar">
+          <button class="ghost-button" type="button" data-upload="talking">
+            <svg><use href="#icon-upload" /></svg>
+            <span>上传口播</span>
+          </button>
+          <button class="ghost-button" type="button" data-upload="environment">
+            <svg><use href="#icon-upload" /></svg>
+            <span>上传环境</span>
+          </button>
+          <button class="ghost-button" type="button" id="reset-demo">
+            <svg><use href="#icon-trash" /></svg>
+            <span>清空素材</span>
+          </button>
+        </div>
+        <div class="upload-limit" id="upload-limit">
+          当前前端限制：单次最多 300 个文件，总素材最多 1000 个。后续接后端后可再调整为分批上传、排队生成。
+        </div>
+        <div class="pool-shell">
+          <div class="pool-row">
+            <div class="pool-label">
+              <strong>口播</strong>
+              <span id="talking-count">0 个</span>
+            </div>
+            <div class="asset-rail" id="talking-rail" aria-label="口播素材列表"></div>
+          </div>
+          <div class="pool-row">
+            <div class="pool-label">
+              <strong>环境</strong>
+              <span id="environment-count">0 个</span>
+            </div>
+            <div class="asset-rail" id="environment-rail" aria-label="环境素材列表"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="step-section tracks-section">
+        <div class="step-head">
+          <span class="step-index">3</span>
+          <strong>成片轨道</strong>
+          <span>点击添加轨道创建一支空视频，把素材拖进去后再调整顺序</span>
+        </div>
+        <div class="track-toolbar">
+          <button class="primary-small" type="button" id="add-track">
+            <svg><use href="#icon-plus" /></svg>
+            <span>添加成片轨道</span>
+          </button>
+          <button class="ghost-button" type="button" id="clear-tracks">清空轨道</button>
+          <span>输出数量 = 当前成片轨道数量</span>
+        </div>
+        <div class="track-list" id="track-list"></div>
+      </section>
+
+      <section class="debug-section output-section">
+        <div class="debug-head output-head">
+          <div>
+            <strong>生成结果</strong>
+            <span>生成后会常驻在这里，单个视频可点击下载，也可以一键保存全部</span>
+          </div>
+          <div class="output-actions">
+            <label class="save-dir-field">
+              <span>保存目录</span>
+              <input id="save-dir" type="text" value="D:\data\codex\短视频\目标视频\剪辑工作台原型\downloads" />
+            </label>
+            <button class="ghost-button" type="button" id="save-all-outputs">
+              <svg><use href="#icon-download" /></svg>
+              <span>一键保存全部</span>
+            </button>
+          </div>
+        </div>
+        <div class="track-strip output-list" id="output-list">
+          <div class="empty-track">生成完成后，结果视频会出现在这里</div>
+        </div>
+      </section>
+
+      <section class="debug-section">
+        <div class="debug-head">
+          <div>
+            <strong>运行日志</strong>
+            <span>用于后续排查上传、排序、生成过程的问题</span>
+          </div>
+          <button class="ghost-button" type="button" id="export-logs">
+            <svg><use href="#icon-download" /></svg>
+            <span>导出日志</span>
+          </button>
+        </div>
+        <div class="log-list" id="log-list" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <footer class="generate-dock">
+      <div class="dock-stat">
+        <span>成片数量</span>
+        <strong id="dock-output-count">1</strong>
+      </div>
+      <div class="dock-stat">
+        <span>素材总数</span>
+        <strong id="dock-asset-count">0</strong>
+      </div>
+      <div class="dock-stat">
+        <span>预计总时长</span>
+        <strong id="dock-duration">--:--</strong>
+      </div>
+      <label class="dock-field">
+        <span>画面比例</span>
+        <select id="ratio">
+          <option>9:16 竖屏</option>
+          <option>1:1 方屏</option>
+          <option>16:9 横屏</option>
+        </select>
+      </label>
+      <label class="dock-field name-rule">
+        <span>命名规则</span>
+        <input id="name-rule" type="text" value="低预算留学_{序号}" />
+      </label>
+      <label class="dock-check">
+        <input type="checkbox" checked />
+        <span>只给环境素材加字幕</span>
+      </label>
+      <div class="dock-progress">
+        <div><span id="progress-label">等待生成</span><strong id="progress-value">0%</strong></div>
+        <i><b id="progress-fill"></b></i>
+      </div>
+      <button class="generate-button" type="button" id="generate">
+        <svg><use href="#icon-play" /></svg>
+        <span>一键生成</span>
+      </button>
+    </footer>
+
+    <input id="talking-input" type="file" accept="video/*" multiple hidden />
+    <input id="environment-input" type="file" accept="video/*,image/*" multiple hidden />
+    <script src="./app.js"></script>
+  </body>
+</html>
