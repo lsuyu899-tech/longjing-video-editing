@@ -10,3 +10,8 @@ asset_manifest.json
 
 test_media/
 test_downloads/
+
+build/
+dist/
+release/
+*.spec

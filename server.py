@@ -16,11 +16,25 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 
-ROOT = Path(__file__).resolve().parent
+def app_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def resource_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", app_dir())).resolve()
+    return app_dir()
+
+
+ROOT = app_dir()
+STATIC_ROOT = resource_dir()
 UPLOAD_DIR = ROOT / "uploads"
 OUTPUT_DIR = ROOT / "outputs"
 WORK_DIR = ROOT / "work"
 LOG_DIR = ROOT / "logs"
+DOWNLOAD_DIR = ROOT / "downloads"
 MANIFEST_FILE = ROOT / "asset_manifest.json"
 LOG_FILE = LOG_DIR / "workbench.log"
 MAX_BATCH_FILES = 300
@@ -29,8 +43,12 @@ MANIFEST_LOCK = threading.Lock()
 
 
 def find_ffmpeg() -> tuple[Path, Path]:
-    workspace = ROOT.parents[1]
+    workspace = ROOT.parents[1] if len(ROOT.parents) > 1 else ROOT
     candidates = [
+        ROOT / "ffmpeg" / "ffmpeg.exe",
+        ROOT / "ffmpeg" / "bin" / "ffmpeg.exe",
+        STATIC_ROOT / "ffmpeg" / "ffmpeg.exe",
+        STATIC_ROOT / "ffmpeg" / "bin" / "ffmpeg.exe",
         workspace / "OpenMontage" / ".local" / "ffmpeg" / "ffmpeg-8.1.1-essentials_build" / "bin" / "ffmpeg.exe",
         workspace / "OpenMontage" / "remotion-composer" / "node_modules" / "@remotion" / "compositor-win32-x64-msvc" / "ffmpeg.exe",
     ]
@@ -44,7 +62,7 @@ FFMPEG, FFPROBE = find_ffmpeg()
 
 
 def ensure_dirs() -> None:
-    for path in [UPLOAD_DIR / "talking", UPLOAD_DIR / "environment", OUTPUT_DIR, WORK_DIR, LOG_DIR]:
+    for path in [UPLOAD_DIR / "talking", UPLOAD_DIR / "environment", OUTPUT_DIR, WORK_DIR, LOG_DIR, DOWNLOAD_DIR]:
         path.mkdir(parents=True, exist_ok=True)
     if not MANIFEST_FILE.exists():
         MANIFEST_FILE.write_text("{}", encoding="utf-8")
@@ -460,7 +478,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             self.serve_file(OUTPUT_DIR / path.removeprefix("/outputs/"))
             return
         relative = "index.html" if path in {"/", ""} else path.lstrip("/")
-        self.serve_file(ROOT / relative)
+        self.serve_file(STATIC_ROOT / relative)
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
@@ -487,7 +505,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
     def serve_file(self, path: Path) -> None:
         try:
             resolved = path.resolve()
-            allowed_roots = [ROOT.resolve(), UPLOAD_DIR.resolve(), OUTPUT_DIR.resolve()]
+            allowed_roots = [STATIC_ROOT.resolve(), UPLOAD_DIR.resolve(), OUTPUT_DIR.resolve()]
             if not any(resolved == root or root in resolved.parents for root in allowed_roots):
                 self.send_error(403)
                 return
@@ -608,7 +626,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             root.attributes("-topmost", True)
             directory = filedialog.askdirectory(
                 title="选择视频保存目录",
-                initialdir=str(ROOT / "downloads"),
+                initialdir=str(DOWNLOAD_DIR),
                 mustexist=False,
             )
             root.destroy()
@@ -664,7 +682,7 @@ def main() -> None:
     ensure_dirs()
     port = int(os.environ.get("VIDEO_WORKBENCH_PORT", "8787"))
     server = ThreadingHTTPServer(("127.0.0.1", port), WorkbenchHandler)
-    log_event("server_start", {"port": port, "root": str(ROOT), "ffmpeg": str(FFMPEG)})
+    log_event("server_start", {"port": port, "root": str(ROOT), "staticRoot": str(STATIC_ROOT), "ffmpeg": str(FFMPEG)})
     print(f"Video workbench running: http://127.0.0.1:{port}/")
     server.serve_forever()
 
