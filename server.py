@@ -263,6 +263,72 @@ def render_segment(source: Path, out: Path, ratio: str) -> None:
     run_cmd(cmd)
 
 
+def render_mix_segment(background: Path, talking: Path, out: Path, ratio: str) -> None:
+    width, height = ratio_size(ratio)
+    duration = min(3.0 if is_image(background) else media_duration(background), media_duration(talking))
+    duration = max(0.3, duration)
+    pip_size = max(160, int(min(width, height) * 0.28))
+    if pip_size % 2:
+        pip_size += 1
+    margin = max(24, int(width * 0.05))
+    bg_filter = ffmpeg_filter(width, height)
+    circle_mask = (
+        f"[1:v]scale={pip_size}:{pip_size}:force_original_aspect_ratio=increase,"
+        f"crop={pip_size}:{pip_size},format=rgba,"
+        "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
+        "a='if(lte((X-W/2)*(X-W/2)+(Y-H/2)*(Y-H/2),(W/2)*(W/2)),255,0)'[pip]"
+    )
+    filter_complex = (
+        f"[0:v]{bg_filter}[bg];"
+        f"{circle_mask};"
+        f"[bg][pip]overlay=W-w-{margin}:{margin}:format=auto,format=yuv420p[v]"
+    )
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    cmd = [str(FFMPEG), "-y"]
+    if is_image(background):
+        cmd.extend(["-loop", "1", "-t", f"{duration:.3f}", "-i", str(background)])
+    else:
+        cmd.extend(["-i", str(background)])
+    cmd.extend(["-i", str(talking)])
+
+    audio_index = "1:a:0"
+    if not has_audio(talking):
+        cmd.extend(["-f", "lavfi", "-t", f"{duration:.3f}", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"])
+        audio_index = "2:a:0"
+
+    cmd.extend(
+        [
+            "-t",
+            f"{duration:.3f}",
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[v]",
+            "-map",
+            audio_index,
+            "-r",
+            "30",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-c:a",
+            "aac",
+            "-ar",
+            "44100",
+            "-ac",
+            "2",
+            "-movflags",
+            "+faststart",
+            str(out),
+        ]
+    )
+    run_cmd(cmd)
+
+
 def concat_segments(segments: list[Path], output: Path) -> None:
     list_file = output.with_suffix(".concat.txt")
     lines = [f"file '{str(segment).replace(chr(92), '/')}'" for segment in segments]
@@ -285,10 +351,27 @@ def concat_segments(segments: list[Path], output: Path) -> None:
     run_cmd(cmd)
 
 
+def nearest_talking_asset(clips: list[dict], current_index: int, manifest: dict) -> dict | None:
+    for index in range(current_index - 1, -1, -1):
+        clip = clips[index]
+        if clip.get("lane") == "talking":
+            asset = manifest.get(clip.get("assetId"))
+            if asset:
+                return asset
+    for index in range(current_index + 1, len(clips)):
+        clip = clips[index]
+        if clip.get("lane") == "talking":
+            asset = manifest.get(clip.get("assetId"))
+            if asset:
+                return asset
+    return None
+
+
 def render_tracks(payload: dict) -> list[dict]:
     manifest = load_manifest()
     tracks = payload.get("tracks") or []
     ratio = payload.get("ratio") or "9:16 竖屏"
+    style_id = payload.get("styleId") or "simple"
     name_rule = payload.get("nameRule") or "视频_{序号}"
     job_id = time.strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
     job_dir = WORK_DIR / job_id
@@ -312,7 +395,14 @@ def render_tracks(payload: dict) -> list[dict]:
             if not source.exists():
                 raise RuntimeError(f"素材文件不存在：{source}")
             segment = job_dir / f"track_{track_index:02d}_clip_{clip_index:02d}.mp4"
-            render_segment(source, segment, ratio)
+            if style_id == "mix" and clip.get("lane") == "environment":
+                talking_asset = nearest_talking_asset(clips, clip_index - 1, manifest)
+                if talking_asset and Path(talking_asset["path"]).exists():
+                    render_mix_segment(source, Path(talking_asset["path"]), segment, ratio)
+                else:
+                    render_segment(source, segment, ratio)
+            else:
+                render_segment(source, segment, ratio)
             segments.append(segment)
 
         number = f"{track_index:02d}"
@@ -382,6 +472,9 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/delete_asset":
             self.handle_delete_asset()
+            return
+        if parsed.path == "/api/choose_directory":
+            self.handle_choose_directory()
             return
         if parsed.path == "/api/save_outputs":
             self.handle_save_outputs()
@@ -503,6 +596,26 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             self.send_json({"ok": True, "deleted": True})
         except Exception as exc:
             log_event("delete_asset_error", {"error": str(exc)})
+            self.send_json({"ok": False, "error": str(exc)}, 500)
+
+    def handle_choose_directory(self) -> None:
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            directory = filedialog.askdirectory(
+                title="选择视频保存目录",
+                initialdir=str(ROOT / "downloads"),
+                mustexist=False,
+            )
+            root.destroy()
+            log_event("choose_directory", {"directory": directory})
+            self.send_json({"ok": True, "directory": directory})
+        except Exception as exc:
+            log_event("choose_directory_error", {"error": str(exc)})
             self.send_json({"ok": False, "error": str(exc)}, 500)
 
     def handle_save_outputs(self) -> None:

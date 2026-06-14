@@ -29,6 +29,9 @@
       <symbol id="icon-plus" viewBox="0 0 24 24">
         <path d="M12 5v14M5 12h14" />
       </symbol>
+      <symbol id="icon-folder" viewBox="0 0 24 24">
+        <path d="M3 7a3 3 0 0 1 3-3h4l2 3h6a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3z" />
+      </symbol>
     </svg>
 
     <header class="app-header">
@@ -60,13 +63,16 @@
             <footer><span>模板顺序</span></footer>
           </button>
 
-          <button class="style-card disabled" type="button" disabled>
-            <strong>口播环境混剪</strong>
-            <p>后续接入：口播为主线，环境素材穿插补画面</p>
+          <button class="style-card" type="button" data-style="mix">
+            <div class="style-top">
+              <strong>口播环境混剪</strong>
+              <span>可用</span>
+            </div>
+            <p>口播为主线，环境素材铺底，口播画面以圆形小窗叠加</p>
             <div class="bar-chart muted" aria-hidden="true">
               <i style="height: 44%"></i><i style="height: 44%"></i><i style="height: 62%"></i><i style="height: 44%"></i><i style="height: 50%"></i>
             </div>
-            <footer><span>待开放</span><span>--</span></footer>
+            <footer><span>圆形小窗</span></footer>
           </button>
 
           <button class="style-card disabled" type="button" disabled>
@@ -156,8 +162,12 @@
           <div class="output-actions">
             <label class="save-dir-field">
               <span>保存目录</span>
-              <input id="save-dir" type="text" value="D:\data\codex\短视频\目标视频\剪辑工作台原型\downloads" />
+              <input id="save-dir" type="text" value="D:\data\codex\短视频\目标视频\剪辑工作台原型\downloads" readonly />
             </label>
+            <button class="ghost-button" type="button" id="choose-save-dir">
+              <svg><use href="#icon-folder" /></svg>
+              <span>选择文件夹</span>
+            </button>
             <button class="ghost-button" type="button" id="save-all-outputs">
               <svg><use href="#icon-download" /></svg>
               <span>一键保存全部</span>
@@ -222,6 +232,14 @@
         <span>一键生成</span>
       </button>
     </footer>
+
+    <div class="modal-backdrop" id="message-modal" hidden>
+      <section class="message-modal" role="dialog" aria-modal="true" aria-labelledby="message-modal-title">
+        <strong id="message-modal-title">操作完成</strong>
+        <p id="message-modal-body">已处理完成</p>
+        <button class="primary-small" type="button" id="message-modal-close">知道了</button>
+      </section>
+    </div>
 
     <input id="talking-input" type="file" accept="video/*" multiple hidden />
     <input id="environment-input" type="file" accept="video/*,image/*" multiple hidden />

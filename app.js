@@ -3,6 +3,10 @@ const styles = [
     id: "simple",
     label: "简单拼接",
   },
+  {
+    id: "mix",
+    label: "口播环境混剪",
+  },
 ];
 
 const uploadLimits = {
@@ -27,6 +31,7 @@ const api = {
   upload: (lane) => `/api/upload?lane=${encodeURIComponent(lane)}`,
   generate: "/api/generate",
   deleteAsset: "/api/delete_asset",
+  chooseDirectory: "/api/choose_directory",
   saveOutputs: "/api/save_outputs",
   reset: "/api/reset",
 };
@@ -517,7 +522,17 @@ function renderStats() {
   $("#dock-duration").textContent = duration;
 }
 
+function renderStyles() {
+  $$("[data-style]").forEach((button) => {
+    const isActive = button.dataset.style === state.activeStyle;
+    button.classList.toggle("active", isActive);
+    const badge = button.querySelector(".style-top span");
+    if (badge) badge.textContent = isActive ? "使用中" : "可用";
+  });
+}
+
 function renderAll() {
+  renderStyles();
   renderRail("talking");
   renderRail("environment");
   renderTrackList();
@@ -661,18 +676,56 @@ async function generateOutputs() {
   }
 }
 
+function showModal(title, body) {
+  const modal = $("#message-modal");
+  if (!modal) return;
+  $("#message-modal-title").textContent = title;
+  $("#message-modal-body").textContent = body;
+  modal.hidden = false;
+}
+
+function hideModal() {
+  const modal = $("#message-modal");
+  if (modal) modal.hidden = true;
+}
+
+async function chooseSaveDirectory() {
+  setUploadMessage("正在打开文件夹选择窗口...", false);
+  try {
+    const response = await fetch(api.chooseDirectory, { method: "POST" });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || "选择文件夹失败");
+    }
+    if (!payload.directory) {
+      setUploadMessage("已取消选择文件夹。", true);
+      writeLog("CHOOSE_DIRECTORY_CANCEL", "取消选择保存目录", {});
+      return;
+    }
+    $("#save-dir").value = payload.directory;
+    setUploadMessage(`保存目录已设置为：${payload.directory}`, false);
+    writeLog("CHOOSE_DIRECTORY_DONE", "选择保存目录", { directory: payload.directory });
+  } catch (error) {
+    setUploadMessage(`选择文件夹失败：${error.message}`, true);
+    showModal("选择文件夹失败", error.message);
+    writeLog("CHOOSE_DIRECTORY_ERROR", "选择保存目录失败", { error: error.message });
+  }
+}
+
 async function saveAllOutputs() {
   const outputs = state.generatedOutputs || [];
   const directory = $("#save-dir")?.value.trim() || "";
 
   if (!outputs.length) {
     setUploadMessage("当前还没有生成结果，先生成视频后再保存。", true);
+    showModal("还没有生成结果", "请先生成视频，完成后再一键保存全部。");
     writeLog("SAVE_OUTPUTS_BLOCKED", "没有可保存的生成结果", {});
     return;
   }
 
   if (!directory) {
-    setUploadMessage("请先填写保存目录。", true);
+    setUploadMessage("请先选择保存目录。", true);
+    showModal("缺少保存目录", "请先点击“选择文件夹”，选择视频要保存到的位置。");
     writeLog("SAVE_OUTPUTS_BLOCKED", "缺少保存目录", {});
     return;
   }
@@ -688,6 +741,7 @@ async function saveAllOutputs() {
       throw new Error(payload.error || "保存失败");
     }
     setUploadMessage(`已保存 ${payload.saved.length} 个视频到：${payload.directory}`, false);
+    showModal("保存完成", `已保存 ${payload.saved.length} 个视频到：${payload.directory}`);
     writeLog("SAVE_OUTPUTS_DONE", "一键保存全部结果", {
       directory: payload.directory,
       count: payload.saved.length,
@@ -695,6 +749,7 @@ async function saveAllOutputs() {
     });
   } catch (error) {
     setUploadMessage(`保存失败：${error.message}`, true);
+    showModal("保存失败", error.message);
     writeLog("SAVE_OUTPUTS_ERROR", "一键保存失败", { directory, error: error.message });
   }
 }
@@ -864,6 +919,7 @@ function bindEvents() {
 
     const styleButton = event.target.closest("[data-style]");
     if (styleButton) {
+      if (styleButton.disabled) return;
       state.activeStyle = styleButton.dataset.style;
       writeLog("STYLE_CHANGE", "切换样式", {
         styleId: state.activeStyle,
@@ -878,7 +934,12 @@ function bindEvents() {
   $("#generate").addEventListener("click", generateOutputs);
   $("#reset-demo").addEventListener("click", resetWorkbench);
   $("#export-logs").addEventListener("click", exportLogs);
+  $("#choose-save-dir").addEventListener("click", chooseSaveDirectory);
   $("#save-all-outputs").addEventListener("click", saveAllOutputs);
+  $("#message-modal-close").addEventListener("click", hideModal);
+  $("#message-modal").addEventListener("click", (event) => {
+    if (event.target.id === "message-modal") hideModal();
+  });
 
   window.addEventListener("error", (event) => {
     writeLog("ERROR", "页面脚本异常", {

@@ -761,6 +761,7 @@ button.empty-track:hover {
   background: #101318;
   border: 1px solid #303744;
   border-radius: 6px;
+  cursor: default;
 }
 
 .output-section {
@@ -769,6 +770,41 @@ button.empty-track:hover {
 
 .output-list {
   min-height: 96px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(4, 7, 12, 0.72);
+  backdrop-filter: blur(6px);
+}
+
+.modal-backdrop[hidden] {
+  display: none;
+}
+
+.message-modal {
+  width: min(380px, 100%);
+  padding: 20px;
+  background: #1b2028;
+  border: 1px solid #344050;
+  border-radius: 8px;
+  box-shadow: 0 22px 80px rgba(0, 0, 0, 0.42);
+}
+
+.message-modal strong {
+  display: block;
+  font-size: 18px;
+}
+
+.message-modal p {
+  margin: 10px 0 16px;
+  color: var(--muted);
+  line-height: 1.7;
 }
 
 .debug-head strong {
