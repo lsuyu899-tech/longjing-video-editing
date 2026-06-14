@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import uuid
+import platform
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -40,6 +41,7 @@ LOG_FILE = LOG_DIR / "workbench.log"
 MAX_BATCH_FILES = 300
 MAX_TOTAL_ASSETS = 1000
 MANIFEST_LOCK = threading.Lock()
+LAST_FFMPEG_ERROR: dict | None = None
 
 
 def find_ffmpeg() -> tuple[Path, Path]:
@@ -89,6 +91,64 @@ def load_manifest() -> dict:
 
 def save_manifest(manifest: dict) -> None:
     MANIFEST_FILE.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def tail_json_log(path: Path, limit: int = 200) -> list[dict]:
+    if not path.exists():
+        return []
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-limit:]
+    items = []
+    for line in lines:
+        try:
+            items.append(json.loads(line))
+        except json.JSONDecodeError:
+            items.append({"raw": line})
+    return items
+
+
+def debug_report() -> dict:
+    manifest = load_manifest()
+    return {
+        "createdAt": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "system": {
+            "platform": platform.platform(),
+            "python": sys.version,
+            "frozen": bool(getattr(sys, "frozen", False)),
+            "executable": sys.executable,
+        },
+        "paths": {
+            "root": str(ROOT),
+            "staticRoot": str(STATIC_ROOT),
+            "ffmpeg": str(FFMPEG),
+            "ffprobe": str(FFPROBE),
+            "uploads": str(UPLOAD_DIR),
+            "outputs": str(OUTPUT_DIR),
+            "work": str(WORK_DIR),
+            "logs": str(LOG_DIR),
+        },
+        "pathChecks": {
+            "ffmpeg": inspect_path(FFMPEG),
+            "ffprobe": inspect_path(FFPROBE),
+            "root": {"path": str(ROOT), "exists": ROOT.exists()},
+            "outputs": {"path": str(OUTPUT_DIR), "exists": OUTPUT_DIR.exists()},
+        },
+        "manifest": {
+            "count": len(manifest),
+            "assets": [
+                {
+                    "id": asset.get("id"),
+                    "lane": asset.get("lane"),
+                    "name": asset.get("name"),
+                    "path": asset.get("path"),
+                    "exists": Path(asset.get("path", "")).exists(),
+                    "size": Path(asset.get("path", "")).stat().st_size if Path(asset.get("path", "")).exists() else None,
+                }
+                for asset in manifest.values()
+            ],
+        },
+        "lastFfmpegError": LAST_FFMPEG_ERROR,
+        "recentBackendLogs": tail_json_log(LOG_FILE),
+    }
 
 
 def safe_name(name: str) -> str:
@@ -164,12 +224,64 @@ def is_image(path: Path) -> bool:
     return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
 
+def cmd_path(path: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(ROOT.resolve()).as_posix()
+    except ValueError:
+        return str(resolved)
+
+
+def inspect_path(path: Path) -> dict:
+    try:
+        return {
+            "path": str(path),
+            "cmdPath": cmd_path(path),
+            "exists": path.exists(),
+            "isFile": path.is_file(),
+            "size": path.stat().st_size if path.exists() and path.is_file() else None,
+            "parentExists": path.parent.exists(),
+        }
+    except Exception as exc:
+        return {"path": str(path), "error": str(exc)}
+
+
+def inspect_cmd(cmd: list[str]) -> dict:
+    paths = []
+    for item in cmd[1:]:
+        if isinstance(item, str) and ("/" in item or "\\" in item) and not item.startswith("["):
+            candidate = Path(item)
+            if not candidate.is_absolute():
+                candidate = ROOT / candidate
+            if candidate.suffix:
+                paths.append(inspect_path(candidate))
+    return {"cwd": str(ROOT), "paths": paths}
+
+
 def run_cmd(cmd: list[str]) -> None:
-    log_event("ffmpeg_command", {"cmd": cmd})
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    global LAST_FFMPEG_ERROR
+    started = time.time()
+    log_event("ffmpeg_command", {"cmd": cmd, "inspect": inspect_cmd(cmd)})
+    result = subprocess.run(
+        cmd,
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    elapsed = round(time.time() - started, 3)
     if result.returncode != 0:
-        log_event("ffmpeg_error", {"stderr": result.stderr[-4000:], "stdout": result.stdout[-1000:]})
-        raise RuntimeError(result.stderr[-1200:] or "ffmpeg 执行失败")
+        LAST_FFMPEG_ERROR = {
+            "returncode": result.returncode,
+            "elapsedSeconds": elapsed,
+            "cmd": cmd,
+            "inspect": inspect_cmd(cmd),
+            "stderr": result.stderr[-6000:],
+            "stdout": result.stdout[-2000:],
+        }
+        log_event("ffmpeg_error", LAST_FFMPEG_ERROR)
+        raise RuntimeError(result.stderr[-1200:] or f"ffmpeg 执行失败，退出码：{result.returncode}")
 
 
 def render_segment(source: Path, out: Path, ratio: str) -> None:
@@ -186,7 +298,7 @@ def render_segment(source: Path, out: Path, ratio: str) -> None:
             "-t",
             "3",
             "-i",
-            str(source),
+                cmd_path(source),
             "-f",
             "lavfi",
             "-t",
@@ -208,7 +320,7 @@ def render_segment(source: Path, out: Path, ratio: str) -> None:
             "44100",
             "-ac",
             "2",
-            str(out),
+            cmd_path(out),
         ]
         run_cmd(cmd)
         return
@@ -218,7 +330,7 @@ def render_segment(source: Path, out: Path, ratio: str) -> None:
             str(FFMPEG),
             "-y",
             "-i",
-            str(source),
+            cmd_path(source),
             "-vf",
             vf,
             "-map",
@@ -241,14 +353,14 @@ def render_segment(source: Path, out: Path, ratio: str) -> None:
             "2",
             "-movflags",
             "+faststart",
-            str(out),
+            cmd_path(out),
         ]
     else:
         cmd = [
             str(FFMPEG),
             "-y",
             "-i",
-            str(source),
+            cmd_path(source),
             "-f",
             "lavfi",
             "-i",
@@ -276,7 +388,7 @@ def render_segment(source: Path, out: Path, ratio: str) -> None:
             "2",
             "-movflags",
             "+faststart",
-            str(out),
+            cmd_path(out),
         ]
     run_cmd(cmd)
 
@@ -305,10 +417,10 @@ def render_mix_segment(background: Path, talking: Path, out: Path, ratio: str) -
 
     cmd = [str(FFMPEG), "-y"]
     if is_image(background):
-        cmd.extend(["-loop", "1", "-t", f"{duration:.3f}", "-i", str(background)])
+        cmd.extend(["-loop", "1", "-t", f"{duration:.3f}", "-i", cmd_path(background)])
     else:
-        cmd.extend(["-i", str(background)])
-    cmd.extend(["-i", str(talking)])
+        cmd.extend(["-i", cmd_path(background)])
+    cmd.extend(["-i", cmd_path(talking)])
 
     audio_index = "1:a:0"
     if not has_audio(talking):
@@ -341,15 +453,15 @@ def render_mix_segment(background: Path, talking: Path, out: Path, ratio: str) -
             "2",
             "-movflags",
             "+faststart",
-            str(out),
+            cmd_path(out),
         ]
     )
     run_cmd(cmd)
 
 
 def concat_segments(segments: list[Path], output: Path) -> None:
-    list_file = output.with_suffix(".concat.txt")
-    lines = [f"file '{str(segment).replace(chr(92), '/')}'" for segment in segments]
+    list_file = segments[0].parent / f"{output.stem}.concat.txt"
+    lines = [f"file '{segment.name}'" for segment in segments]
     list_file.write_text("\n".join(lines), encoding="utf-8")
     cmd = [
         str(FFMPEG),
@@ -359,12 +471,12 @@ def concat_segments(segments: list[Path], output: Path) -> None:
         "-safe",
         "0",
         "-i",
-        str(list_file),
+        cmd_path(list_file),
         "-c",
         "copy",
         "-movflags",
         "+faststart",
-        str(output),
+        cmd_path(output),
     ]
     run_cmd(cmd)
 
@@ -471,6 +583,9 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
         if path == "/api/health":
             self.send_json({"ok": True, "ffmpeg": str(FFMPEG)})
             return
+        if path == "/api/debug_report":
+            self.send_json({"ok": True, "report": debug_report()})
+            return
         if path.startswith("/uploads/"):
             self.serve_file(UPLOAD_DIR / path.removeprefix("/uploads/"))
             return
@@ -552,7 +667,9 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
                     if not getattr(field, "filename", ""):
                         continue
                     asset_id = uuid.uuid4().hex
-                    filename = f"{asset_id}_{safe_name(field.filename)}"
+                    suffix = Path(field.filename).suffix.lower() or ".mp4"
+                    suffix = re.sub(r"[^a-z0-9.]+", "", suffix) or ".mp4"
+                    filename = f"{asset_id}{suffix}"
                     target = UPLOAD_DIR / lane / filename
                     with target.open("wb") as f:
                         shutil.copyfileobj(field.file, f)
@@ -587,7 +704,7 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             self.send_json({"ok": True, "outputs": outputs})
         except Exception as exc:
             log_event("generate_error", {"error": str(exc)})
-            self.send_json({"ok": False, "error": str(exc)}, 500)
+            self.send_json({"ok": False, "error": str(exc), "debug": debug_report()}, 500)
 
     def read_json_body(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))

@@ -32,6 +32,7 @@ const api = {
   generate: "/api/generate",
   deleteAsset: "/api/delete_asset",
   chooseDirectory: "/api/choose_directory",
+  debugReport: "/api/debug_report",
   saveOutputs: "/api/save_outputs",
   reset: "/api/reset",
 };
@@ -359,14 +360,39 @@ function renderLogs() {
     .join("");
 }
 
-function exportLogs() {
+async function fetchDebugReport() {
+  try {
+    const response = await fetch(api.debugReport);
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || "读取后端调试报告失败");
+    }
+    return payload.report;
+  } catch (error) {
+    return {
+      error: error.message,
+      hint: "后端调试报告读取失败，请同时提供软件文件夹里的 logs/workbench.log",
+    };
+  }
+}
+
+async function exportLogs() {
+  const backendReport = await fetchDebugReport();
   const payload = {
     exportedAt: new Date().toISOString(),
     app: "video-batch-workbench",
-    version: "0.5.0",
+    version: "0.6.0",
     limits: uploadLimits,
+    currentUrl: window.location.href,
+    userAgent: navigator.userAgent,
+    activeStyle: state.activeStyle,
+    assets: {
+      talking: state.talking,
+      environment: state.environment,
+    },
     tracks: state.tracks,
     logs: state.logs,
+    backend: backendReport,
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -378,7 +404,11 @@ function exportLogs() {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
-  writeLog("EXPORT_LOGS", "导出运行日志", { logCount: state.logs.length });
+  writeLog("EXPORT_LOGS", "导出运行日志", {
+    logCount: state.logs.length,
+    backendLogs: backendReport?.recentBackendLogs?.length || 0,
+    hasFfmpegError: Boolean(backendReport?.lastFfmpegError),
+  });
 }
 
 function uploadSlot(label, lane) {
@@ -652,7 +682,9 @@ async function generateOutputs() {
     });
     const payload = await response.json();
     if (!response.ok || !payload.ok) {
-      throw new Error(payload.error || "生成失败");
+      const error = new Error(payload.error || "生成失败");
+      error.debug = payload.debug;
+      throw error;
     }
     clearInterval(state.progressTimer);
     state.progressTimer = null;
@@ -672,7 +704,7 @@ async function generateOutputs() {
     state.progressTimer = null;
     progressLabel.textContent = "生成失败";
     setUploadMessage(`生成失败：${error.message}`, true);
-    writeLog("GENERATE_ERROR", "生成失败", { error: error.message });
+    writeLog("GENERATE_ERROR", "生成失败", { error: error.message, debug: error.debug || null });
   }
 }
 
