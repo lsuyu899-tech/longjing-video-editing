@@ -495,19 +495,29 @@ def render_mix_segment(background: Path, talking: Path, out: Path, ratio: str) -
     pip_scale = pip_size + max(70, int(pip_size * 0.48))
     if pip_scale % 2:
         pip_scale += 1
+    subtitle_height = max(90, int(height * 0.12))
+    if subtitle_height % 2:
+        subtitle_height += 1
     margin = max(28, int(width * 0.075))
     pip_top = max(96, int(height * 0.22))
     bg_filter = ffmpeg_cover_filter(width, height)
     circle_mask = (
-        f"[1:v]scale={pip_scale}:{pip_scale}:force_original_aspect_ratio=increase,"
+        f"[pipsrc]scale={pip_scale}:{pip_scale}:force_original_aspect_ratio=increase,"
         f"crop={pip_size}:{pip_size}:(iw-ow)/2:(ih-oh)*0.20,format=rgba,"
         "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
         "a='if(lte((X-W/2)*(X-W/2)+(Y-H/2)*(Y-H/2),(W/2)*(W/2)),255,0)'[pip]"
     )
+    subtitle_strip = (
+        f"[subsrc]scale={width}:{height}:force_original_aspect_ratio=increase,"
+        f"crop={width}:{height},crop={width}:{subtitle_height}:0:{height - subtitle_height},format=rgba[sub]"
+    )
     filter_complex = (
         f"[0:v]{bg_filter}[bg];"
+        "[1:v]split=2[pipsrc][subsrc];"
+        f"{subtitle_strip};"
         f"{circle_mask};"
-        f"[bg][pip]overlay=W-w-{margin}:{pip_top}:format=auto,format=yuv420p[v]"
+        "[bg][sub]overlay=0:H-h:format=auto[withsub];"
+        f"[withsub][pip]overlay=W-w-{margin}:{pip_top}:format=auto,format=yuv420p[v]"
     )
     out.parent.mkdir(parents=True, exist_ok=True)
 
