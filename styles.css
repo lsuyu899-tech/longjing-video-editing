@@ -853,6 +853,130 @@ button.empty-track:hover {
   font-size: 11px;
 }
 
+.floating-assets {
+  position: fixed;
+  top: 64px;
+  right: 18px;
+  z-index: 19;
+  width: min(430px, calc(100vw - 36px));
+  color: var(--text);
+}
+
+.floating-assets[hidden],
+.floating-assets-panel[hidden] {
+  display: none;
+}
+
+.floating-assets-toggle {
+  display: flex;
+  width: 100%;
+  height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px;
+  color: #ffffff;
+  background: #202631;
+  border: 1px solid #3c4656;
+  border-radius: 8px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.28);
+}
+
+.floating-assets-toggle span {
+  font-weight: 900;
+}
+
+.floating-assets-toggle strong {
+  color: #9fb6ff;
+  font-size: 12px;
+}
+
+.floating-assets-panel {
+  margin-top: 8px;
+  padding: 10px;
+  background: rgba(24, 28, 35, 0.98);
+  border: 1px solid #344050;
+  border-radius: 8px;
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.36);
+}
+
+.floating-assets-body {
+  display: grid;
+  gap: 10px;
+  max-height: min(48vh, 390px);
+  overflow: auto;
+}
+
+.floating-lane {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.floating-lane > span {
+  padding-top: 10px;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.floating-lane > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-height: 38px;
+}
+
+.floating-lane em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  line-height: 36px;
+}
+
+.floating-asset-card {
+  display: grid;
+  width: 116px;
+  min-height: 58px;
+  padding: 7px 8px;
+  color: #dfe5ef;
+  background: #172232;
+  border: 1px solid #324058;
+  border-radius: 7px;
+  cursor: grab;
+}
+
+.floating-asset-card.environment {
+  background: #173028;
+  border-color: #2c5145;
+}
+
+.floating-asset-card:active {
+  cursor: grabbing;
+}
+
+.floating-asset-card small {
+  color: #9fb6ff;
+  font-size: 10px;
+}
+
+.floating-asset-card strong {
+  overflow: hidden;
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.floating-asset-card span {
+  justify-self: end;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .generate-dock {
   position: fixed;
   left: 0;
@@ -1015,5 +1139,15 @@ button.empty-track:hover {
   .output-actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .floating-assets {
+    top: 92px;
+    right: 12px;
+    width: calc(100vw - 24px);
+  }
+
+  .floating-assets-body {
+    max-height: 32vh;
   }
 }

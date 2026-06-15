@@ -25,6 +25,7 @@ const state = {
   generatedOutputs: [],
   logs: [],
   progressTimer: null,
+  floatingAssetsOpen: true,
 };
 
 const api = {
@@ -230,9 +231,11 @@ function moveClipToTrack(sourceTrackId, clipId, targetTrackId, targetIndex = nul
   const sourceIndex = sourceTrack.clips.findIndex((clip) => clip.clipId === clipId);
   if (sourceIndex < 0) return;
 
+  const originalTargetLength = targetTrack.clips.length;
+  let insertAt = targetIndex === null ? originalTargetLength : Math.max(0, Math.min(targetIndex, originalTargetLength));
   const [clip] = sourceTrack.clips.splice(sourceIndex, 1);
-  let insertAt = targetIndex === null ? targetTrack.clips.length : Math.max(0, Math.min(targetIndex, targetTrack.clips.length));
   if (sourceTrackId === targetTrackId && sourceIndex < insertAt) insertAt -= 1;
+  insertAt = Math.max(0, Math.min(insertAt, targetTrack.clips.length));
   targetTrack.clips.splice(insertAt, 0, clip);
 
   writeLog("MOVE_CLIP", "调整轨道内素材顺序", {
@@ -381,7 +384,7 @@ async function exportLogs() {
   const payload = {
     exportedAt: new Date().toISOString(),
     app: "video-batch-workbench",
-    version: "0.6.1",
+    version: "0.6.2",
     limits: uploadLimits,
     currentUrl: window.location.href,
     userAgent: navigator.userAgent,
@@ -455,6 +458,50 @@ function renderRail(lane) {
       `;
     })
     .join("") + uploadSlot(`${laneName(lane)}素材`, lane);
+}
+
+function compactAssetCard(item, lane) {
+  return `
+    <article class="floating-asset-card ${lane}" draggable="true" data-drag-source="pool" data-lane="${lane}" data-asset-id="${item.id}" title="${item.name}">
+      <small>${laneName(lane)}</small>
+      <strong>${item.name}</strong>
+      <span>${item.duration}</span>
+    </article>
+  `;
+}
+
+function renderFloatingAssets() {
+  const shell = $("#floating-assets");
+  const body = $("#floating-assets-body");
+  const count = $("#floating-assets-count");
+  const panel = $("#floating-assets-panel");
+  if (!shell || !body || !count || !panel) return;
+
+  const total = totalAssets();
+  count.textContent = `${total} 个素材`;
+  body.innerHTML = total
+    ? `
+      <div class="floating-lane">
+        <span>口播</span>
+        <div>${state.talking.map((asset) => compactAssetCard(asset, "talking")).join("") || `<em>暂无口播</em>`}</div>
+      </div>
+      <div class="floating-lane">
+        <span>环境</span>
+        <div>${state.environment.map((asset) => compactAssetCard(asset, "environment")).join("") || `<em>暂无环境</em>`}</div>
+      </div>
+    `
+    : "";
+  panel.hidden = !state.floatingAssetsOpen;
+  updateFloatingAssetsVisibility();
+}
+
+function updateFloatingAssetsVisibility() {
+  const shell = $("#floating-assets");
+  const pool = $(".pool-shell");
+  if (!shell || !pool) return;
+
+  const poolBottom = pool.getBoundingClientRect().bottom;
+  shell.hidden = !(totalAssets() > 0 && poolBottom < 70);
 }
 
 function addTrackCard() {
@@ -567,6 +614,7 @@ function renderAll() {
   renderRail("environment");
   renderTrackList();
   renderOutputPanel();
+  renderFloatingAssets();
   renderStats();
 }
 
@@ -943,6 +991,16 @@ function bindEvents() {
       return;
     }
 
+    const floatingToggle = event.target.closest("#floating-assets-toggle");
+    if (floatingToggle) {
+      state.floatingAssetsOpen = !state.floatingAssetsOpen;
+      writeLog("TOGGLE_FLOATING_ASSETS", state.floatingAssetsOpen ? "展开悬浮素材栏" : "收起悬浮素材栏", {
+        open: state.floatingAssetsOpen,
+      });
+      renderFloatingAssets();
+      return;
+    }
+
     const removeClipButton = event.target.closest("[data-remove-clip]");
     if (removeClipButton) {
       removeClip(removeClipButton.dataset.trackId, removeClipButton.dataset.removeClip);
@@ -972,6 +1030,8 @@ function bindEvents() {
   $("#message-modal").addEventListener("click", (event) => {
     if (event.target.id === "message-modal") hideModal();
   });
+  window.addEventListener("scroll", updateFloatingAssetsVisibility, { passive: true });
+  window.addEventListener("resize", updateFloatingAssetsVisibility);
 
   window.addEventListener("error", (event) => {
     writeLog("ERROR", "页面脚本异常", {
