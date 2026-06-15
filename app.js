@@ -381,7 +381,7 @@ async function exportLogs() {
   const payload = {
     exportedAt: new Date().toISOString(),
     app: "video-batch-workbench",
-    version: "0.6.0",
+    version: "0.6.1",
     limits: uploadLimits,
     currentUrl: window.location.href,
     userAgent: navigator.userAgent,

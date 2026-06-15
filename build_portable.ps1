@@ -6,8 +6,8 @@ $Python = Join-Path $WorkspaceRoot "OpenMontage\.venv\Scripts\python.exe"
 $FfmpegSrc = Join-Path $WorkspaceRoot "OpenMontage\.local\ffmpeg\ffmpeg-8.1.1-essentials_build\bin"
 $BuildName = "LongjingVideoEditing"
 $ReleaseRoot = Join-Path $Root "release"
-$AppDir = Join-Path $ReleaseRoot "longjing-video-editing-v0.1.1-windows"
-$ZipPath = Join-Path $ReleaseRoot "longjing-video-editing-v0.1.1-windows.zip"
+$AppDir = Join-Path $ReleaseRoot "longjing-video-editing-v0.1.2-windows"
+$ZipPath = Join-Path $ReleaseRoot "longjing-video-editing-v0.1.2-windows.zip"
 
 if (!(Test-Path -LiteralPath $Python)) {
   throw "Python runtime was not found: $Python"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import cgi
+import ctypes
 import json
 import mimetypes
 import os
@@ -42,6 +43,35 @@ MAX_BATCH_FILES = 300
 MAX_TOTAL_ASSETS = 1000
 MANIFEST_LOCK = threading.Lock()
 LAST_FFMPEG_ERROR: dict | None = None
+
+
+def configure_windows_error_mode() -> None:
+    if os.name != "nt":
+        return
+    try:
+        sem_failcriticalerrors = 0x0001
+        sem_nogpfault_errorbox = 0x0002
+        sem_noopenfile_errorbox = 0x8000
+        ctypes.windll.kernel32.SetErrorMode(
+            sem_failcriticalerrors | sem_nogpfault_errorbox | sem_noopenfile_errorbox
+        )
+    except Exception:
+        pass
+
+
+def hidden_subprocess_kwargs() -> dict:
+    if os.name != "nt":
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = 0
+    return {
+        "startupinfo": startupinfo,
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    }
+
+
+configure_windows_error_mode()
 
 
 def find_ffmpeg() -> tuple[Path, Path]:
@@ -158,50 +188,103 @@ def safe_name(name: str) -> str:
     return f"{stem or 'asset'}{suffix or '.mp4'}"
 
 
-def media_duration(path: Path) -> float:
+def run_media_probe(cmd: list[str], purpose: str, target: Path, timeout: int = 12) -> subprocess.CompletedProcess | None:
+    started = time.time()
     try:
         result = subprocess.run(
-            [
-                str(FFPROBE),
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                str(path),
-            ],
-            check=True,
+            cmd,
+            cwd=str(ROOT),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            **hidden_subprocess_kwargs(),
         )
-        return max(0.1, float(result.stdout.strip()))
-    except Exception:
-        return 3.0
+    except subprocess.TimeoutExpired as exc:
+        log_event(
+            "ffprobe_timeout",
+            {
+                "purpose": purpose,
+                "target": inspect_path(target),
+                "cmd": cmd,
+                "timeoutSeconds": timeout,
+                "stdout": (exc.stdout or "")[-1000:] if isinstance(exc.stdout, str) else "",
+                "stderr": (exc.stderr or "")[-2000:] if isinstance(exc.stderr, str) else "",
+            },
+        )
+        return None
+    except Exception as exc:
+        log_event(
+            "ffprobe_exception",
+            {
+                "purpose": purpose,
+                "target": inspect_path(target),
+                "cmd": cmd,
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        )
+        return None
+
+    if result.returncode != 0:
+        log_event(
+            "ffprobe_error",
+            {
+                "purpose": purpose,
+                "target": inspect_path(target),
+                "cmd": cmd,
+                "returncode": result.returncode,
+                "elapsedSeconds": round(time.time() - started, 3),
+                "stdout": result.stdout[-1000:],
+                "stderr": result.stderr[-2000:],
+            },
+        )
+    return result
+
+
+def media_duration(path: Path) -> float:
+    result = run_media_probe(
+        [
+            str(FFPROBE),
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            cmd_path(path),
+        ],
+        "duration",
+        path,
+    )
+    if result and result.returncode == 0:
+        try:
+            return max(0.1, float(result.stdout.strip()))
+        except ValueError:
+            log_event("ffprobe_parse_error", {"purpose": "duration", "target": inspect_path(path), "stdout": result.stdout})
+    return 3.0
 
 
 def has_audio(path: Path) -> bool:
-    try:
-        result = subprocess.run(
-            [
-                str(FFPROBE),
-                "-v",
-                "error",
-                "-select_streams",
-                "a:0",
-                "-show_entries",
-                "stream=index",
-                "-of",
-                "csv=p=0",
-                str(path),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+    result = run_media_probe(
+        [
+            str(FFPROBE),
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=index",
+            "-of",
+            "csv=p=0",
+            cmd_path(path),
+        ],
+        "audio_stream",
+        path,
+    )
+    if result and result.returncode == 0:
         return bool(result.stdout.strip())
-    except Exception:
-        return False
+    return False
 
 
 def ratio_size(ratio: str) -> tuple[int, int]:
@@ -269,6 +352,7 @@ def run_cmd(cmd: list[str]) -> None:
         text=True,
         encoding="utf-8",
         errors="replace",
+        **hidden_subprocess_kwargs(),
     )
     elapsed = round(time.time() - started, 3)
     if result.returncode != 0:
