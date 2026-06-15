@@ -303,6 +303,14 @@ def ffmpeg_filter(width: int, height: int) -> str:
     )
 
 
+def ffmpeg_cover_filter(width: int, height: int) -> str:
+    return (
+        f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+        f"crop={width}:{height},"
+        "setsar=1,format=yuv420p"
+    )
+
+
 def is_image(path: Path) -> bool:
     return path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
@@ -479,23 +487,27 @@ def render_segment(source: Path, out: Path, ratio: str) -> None:
 
 def render_mix_segment(background: Path, talking: Path, out: Path, ratio: str) -> None:
     width, height = ratio_size(ratio)
-    duration = min(3.0 if is_image(background) else media_duration(background), media_duration(talking))
+    duration = media_duration(talking)
     duration = max(0.3, duration)
-    pip_size = max(160, int(min(width, height) * 0.28))
+    pip_size = max(170, int(min(width, height) * 0.30))
     if pip_size % 2:
         pip_size += 1
-    margin = max(24, int(width * 0.05))
-    bg_filter = ffmpeg_filter(width, height)
+    pip_scale = pip_size + max(70, int(pip_size * 0.48))
+    if pip_scale % 2:
+        pip_scale += 1
+    margin = max(28, int(width * 0.075))
+    pip_top = max(96, int(height * 0.22))
+    bg_filter = ffmpeg_cover_filter(width, height)
     circle_mask = (
-        f"[1:v]scale={pip_size}:{pip_size}:force_original_aspect_ratio=increase,"
-        f"crop={pip_size}:{pip_size},format=rgba,"
+        f"[1:v]scale={pip_scale}:{pip_scale}:force_original_aspect_ratio=increase,"
+        f"crop={pip_size}:{pip_size}:(iw-ow)/2:(ih-oh)*0.20,format=rgba,"
         "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
         "a='if(lte((X-W/2)*(X-W/2)+(Y-H/2)*(Y-H/2),(W/2)*(W/2)),255,0)'[pip]"
     )
     filter_complex = (
         f"[0:v]{bg_filter}[bg];"
         f"{circle_mask};"
-        f"[bg][pip]overlay=W-w-{margin}:{margin}:format=auto,format=yuv420p[v]"
+        f"[bg][pip]overlay=W-w-{margin}:{pip_top}:format=auto,format=yuv420p[v]"
     )
     out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -503,7 +515,7 @@ def render_mix_segment(background: Path, talking: Path, out: Path, ratio: str) -
     if is_image(background):
         cmd.extend(["-loop", "1", "-t", f"{duration:.3f}", "-i", cmd_path(background)])
     else:
-        cmd.extend(["-i", cmd_path(background)])
+        cmd.extend(["-stream_loop", "-1", "-i", cmd_path(background)])
     cmd.extend(["-i", cmd_path(talking)])
 
     audio_index = "1:a:0"
@@ -581,6 +593,19 @@ def nearest_talking_asset(clips: list[dict], current_index: int, manifest: dict)
     return None
 
 
+def next_talking_asset(clips: list[dict], current_index: int, manifest: dict) -> tuple[int, dict] | None:
+    next_index = current_index + 1
+    if next_index >= len(clips):
+        return None
+    next_clip = clips[next_index]
+    if next_clip.get("lane") != "talking":
+        return None
+    asset = manifest.get(next_clip.get("assetId"))
+    if not asset:
+        return None
+    return next_index, asset
+
+
 def render_tracks(payload: dict) -> list[dict]:
     manifest = load_manifest()
     tracks = payload.get("tracks") or []
@@ -601,23 +626,41 @@ def render_tracks(payload: dict) -> list[dict]:
             continue
 
         segments: list[Path] = []
-        for clip_index, clip in enumerate(clips, start=1):
+        clip_index = 0
+        segment_index = 1
+        while clip_index < len(clips):
+            clip = clips[clip_index]
             asset = manifest.get(clip.get("assetId"))
             if not asset:
                 raise RuntimeError(f"轨道 {track_index} 的素材不存在：{clip.get('assetId')}")
             source = Path(asset["path"])
             if not source.exists():
                 raise RuntimeError(f"素材文件不存在：{source}")
-            segment = job_dir / f"track_{track_index:02d}_clip_{clip_index:02d}.mp4"
+            segment = job_dir / f"track_{track_index:02d}_clip_{segment_index:02d}.mp4"
             if style_id == "mix" and clip.get("lane") == "environment":
-                talking_asset = nearest_talking_asset(clips, clip_index - 1, manifest)
-                if talking_asset and Path(talking_asset["path"]).exists():
+                next_talking = next_talking_asset(clips, clip_index, manifest)
+                if next_talking and Path(next_talking[1]["path"]).exists():
+                    next_index, talking_asset = next_talking
                     render_mix_segment(source, Path(talking_asset["path"]), segment, ratio)
+                    log_event(
+                        "mix_pair_segment",
+                        {
+                            "trackIndex": track_index,
+                            "environmentClipIndex": clip_index + 1,
+                            "talkingClipIndex": next_index + 1,
+                            "environment": asset.get("name"),
+                            "talking": talking_asset.get("name"),
+                        },
+                    )
+                    clip_index = next_index + 1
                 else:
                     render_segment(source, segment, ratio)
+                    clip_index += 1
             else:
                 render_segment(source, segment, ratio)
+                clip_index += 1
             segments.append(segment)
+            segment_index += 1
 
         number = f"{track_index:02d}"
         filename = safe_name(name_rule.replace("{序号}", number)) if "{序号}" in name_rule else safe_name(f"{name_rule}_{number}.mp4")
