@@ -737,15 +737,16 @@ def render_mix_segment(background: Path, talking: Path, out: Path, ratio: str) -
     if face_crop:
         pip_source_filter = (
             f"[1:v]crop={face_crop['size']}:{face_crop['size']}:{face_crop['x']}:{face_crop['y']},"
-            f"scale={pip_size}:{pip_size},format=rgba,"
+            f"scale={pip_size}:{pip_size}:flags=lanczos,setsar=1,format=rgb24,"
         )
     else:
         pip_source_filter = (
             f"[1:v]scale={pip_scale}:{pip_scale}:force_original_aspect_ratio=increase,"
-            f"crop={pip_size}:{pip_size}:(iw-ow)/2:(ih-oh)*0.20,format=rgba,"
+            f"crop={pip_size}:{pip_size}:(iw-ow)/2:(ih-oh)*0.20,setsar=1,format=rgb24,"
         )
     circle_mask = (
         f"{pip_source_filter}"
+        "format=rgba,"
         "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
         "a='if(lte((X-W/2)*(X-W/2)+(Y-H/2)*(Y-H/2),(W/2)*(W/2)),255,0)'[pip]"
     )

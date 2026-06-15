@@ -747,6 +747,7 @@ async function generateOutputs() {
       styleId: style.id,
       styleLabel: style.label,
     });
+    showModal("生成完成", `已生成 ${state.generatedOutputs.length} 支视频，结果已放到生成结果区域。`);
   } catch (error) {
     clearInterval(state.progressTimer);
     state.progressTimer = null;
