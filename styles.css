@@ -429,7 +429,8 @@ button.slot-card {
 }
 
 .asset-card.dragging,
-.clip-card.dragging {
+.clip-card.dragging,
+.floating-asset-card.dragging {
   opacity: 0.48;
   outline: 1px solid var(--blue);
 }

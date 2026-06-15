@@ -384,7 +384,7 @@ async function exportLogs() {
   const payload = {
     exportedAt: new Date().toISOString(),
     app: "video-batch-workbench",
-    version: "0.6.2",
+    version: "0.6.3",
     limits: uploadLimits,
     currentUrl: window.location.href,
     userAgent: navigator.userAgent,
@@ -886,7 +886,7 @@ function targetIndexForDrop(strip, event) {
 
 function bindDragEvents() {
   document.addEventListener("dragstart", (event) => {
-    const assetCard = event.target.closest(".asset-card[draggable='true']");
+    const assetCard = event.target.closest(".asset-card[draggable='true'], .floating-asset-card[draggable='true']");
     const clipCard = event.target.closest(".clip-card[draggable='true']");
     const source = assetCard || clipCard;
     if (!source) return;
