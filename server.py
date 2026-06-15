@@ -734,15 +734,20 @@ def render_mix_segment(background: Path, talking: Path, out: Path, ratio: str) -
     pip_top = max(96, int(height * 0.22))
     bg_filter = ffmpeg_cover_filter(width, height)
     face_crop = detect_face_crop(talking)
+    pip_trim_start = min(0.08, max(0.0, duration * 0.25))
+    pip_trim_tail = min(0.12, max(0.0, duration * 0.25))
+    pip_trim_end = max(pip_trim_start + 0.05, duration - pip_trim_tail)
+    pip_video_prefix = f"[1:v]trim=start={pip_trim_start:.3f}:end={pip_trim_end:.3f},setpts=PTS-STARTPTS,"
+    pip_video_suffix = "tpad=stop_mode=clone:stop_duration=0.30,"
     if face_crop:
         pip_source_filter = (
-            f"[1:v]crop={face_crop['size']}:{face_crop['size']}:{face_crop['x']}:{face_crop['y']},"
-            f"scale={pip_size}:{pip_size}:flags=lanczos,setsar=1,format=rgb24,"
+            f"{pip_video_prefix}crop={face_crop['size']}:{face_crop['size']}:{face_crop['x']}:{face_crop['y']},"
+            f"scale={pip_size}:{pip_size}:flags=lanczos,setsar=1,{pip_video_suffix}format=rgb24,"
         )
     else:
         pip_source_filter = (
-            f"[1:v]scale={pip_scale}:{pip_scale}:force_original_aspect_ratio=increase,"
-            f"crop={pip_size}:{pip_size}:(iw-ow)/2:(ih-oh)*0.20,setsar=1,format=rgb24,"
+            f"{pip_video_prefix}scale={pip_scale}:{pip_scale}:force_original_aspect_ratio=increase,"
+            f"crop={pip_size}:{pip_size}:(iw-ow)/2:(ih-oh)*0.20,setsar=1,{pip_video_suffix}format=rgb24,"
         )
     circle_mask = (
         f"{pip_source_filter}"
