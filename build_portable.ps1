@@ -4,10 +4,11 @@ $Root = $PSScriptRoot
 $WorkspaceRoot = Split-Path (Split-Path $Root -Parent) -Parent
 $Python = Join-Path $WorkspaceRoot "OpenMontage\.venv\Scripts\python.exe"
 $FfmpegSrc = Join-Path $WorkspaceRoot "OpenMontage\.local\ffmpeg\ffmpeg-8.1.1-essentials_build\bin"
+$Cv2Data = Join-Path $WorkspaceRoot "OpenMontage\.venv\Lib\site-packages\cv2\data"
 $BuildName = "LongjingVideoEditing"
 $ReleaseRoot = Join-Path $Root "release"
-$AppDir = Join-Path $ReleaseRoot "longjing-video-editing-v0.1.6-windows"
-$ZipPath = Join-Path $ReleaseRoot "longjing-video-editing-v0.1.6-windows.zip"
+$AppDir = Join-Path $ReleaseRoot "longjing-video-editing-v0.1.7-windows"
+$ZipPath = Join-Path $ReleaseRoot "longjing-video-editing-v0.1.7-windows.zip"
 
 if (!(Test-Path -LiteralPath $Python)) {
   throw "Python runtime was not found: $Python"
@@ -15,6 +16,10 @@ if (!(Test-Path -LiteralPath $Python)) {
 
 if (!(Test-Path -LiteralPath (Join-Path $FfmpegSrc "ffmpeg.exe"))) {
   throw "ffmpeg.exe was not found: $FfmpegSrc"
+}
+
+if (!(Test-Path -LiteralPath (Join-Path $Cv2Data "haarcascade_frontalface_alt2.xml"))) {
+  throw "OpenCV face cascade was not found: $Cv2Data"
 }
 
 $OldErrorActionPreference = $ErrorActionPreference
@@ -44,6 +49,9 @@ try {
     --add-data "index.html;." `
     --add-data "styles.css;." `
     --add-data "app.js;." `
+    --add-data "$Cv2Data;cv2/data" `
+    --hidden-import cv2 `
+    --hidden-import numpy `
     --hidden-import tkinter `
     --hidden-import tkinter.filedialog `
     launcher.py

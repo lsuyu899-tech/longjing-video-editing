@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -16,6 +17,11 @@ import platform
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
+
+try:
+    import cv2
+except Exception:
+    cv2 = None
 
 
 def app_dir() -> Path:
@@ -43,6 +49,8 @@ MAX_BATCH_FILES = 300
 MAX_TOTAL_ASSETS = 1000
 MANIFEST_LOCK = threading.Lock()
 LAST_FFMPEG_ERROR: dict | None = None
+FACE_CROP_CACHE: dict[str, dict | None] = {}
+FACE_CROP_LOCK = threading.Lock()
 
 
 def configure_windows_error_mode() -> None:
@@ -287,6 +295,233 @@ def has_audio(path: Path) -> bool:
     return False
 
 
+def ascii_temp_dir(name: str) -> Path:
+    path = Path(tempfile.gettempdir()) / "longjing_video_editing" / name
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def ascii_cascade_path(filename: str) -> Path | None:
+    if cv2 is None:
+        return None
+    target = ascii_temp_dir("opencv") / filename
+    if target.exists():
+        return target
+    candidates = [
+        STATIC_ROOT / "cv2" / "data" / filename,
+        Path(getattr(cv2.data, "haarcascades", "")) / filename,
+    ]
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                shutil.copyfile(candidate, target)
+                return target
+        except Exception:
+            continue
+    return None
+
+
+def ascii_yunet_model_path() -> Path | None:
+    target = ascii_temp_dir("opencv") / "face_detection_yunet_2023mar.onnx"
+    if target.exists():
+        return target
+    candidates = [
+        STATIC_ROOT / "models" / "face_detection_yunet_2023mar.onnx",
+        ROOT / "models" / "face_detection_yunet_2023mar.onnx",
+    ]
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                shutil.copyfile(candidate, target)
+                return target
+        except Exception:
+            continue
+    return None
+
+
+def extract_face_frame(video: Path, time_offset: float, output: Path) -> bool:
+    cmd = [
+        str(FFMPEG),
+        "-y",
+        "-ss",
+        f"{time_offset:.3f}",
+        "-i",
+        cmd_path(video),
+        "-frames:v",
+        "1",
+        "-q:v",
+        "2",
+        str(output),
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            **hidden_subprocess_kwargs(),
+        )
+        if result.returncode != 0:
+            log_event("face_frame_extract_error", {"video": inspect_path(video), "cmd": cmd, "stderr": result.stderr[-1200:]})
+            return False
+        return output.exists() and output.stat().st_size > 0
+    except Exception as exc:
+        log_event("face_frame_extract_exception", {"video": inspect_path(video), "error": f"{type(exc).__name__}: {exc}"})
+        return False
+
+
+def detect_face_crop(video: Path) -> dict | None:
+    if cv2 is None:
+        log_event("face_detect_unavailable", {"reason": "cv2 import failed"})
+        return None
+
+    cache_key = str(video.resolve())
+    with FACE_CROP_LOCK:
+        if cache_key in FACE_CROP_CACHE:
+            return FACE_CROP_CACHE[cache_key]
+
+    cascade_path = ascii_cascade_path("haarcascade_frontalface_alt2.xml")
+    eye_cascade_path = ascii_cascade_path("haarcascade_eye_tree_eyeglasses.xml") or ascii_cascade_path("haarcascade_eye.xml")
+    yunet_path = ascii_yunet_model_path()
+    has_yunet = bool(yunet_path and hasattr(cv2, "FaceDetectorYN_create"))
+    if not cascade_path and not has_yunet:
+        log_event("face_detect_unavailable", {"reason": "cascade file missing"})
+        with FACE_CROP_LOCK:
+            FACE_CROP_CACHE[cache_key] = None
+        return None
+
+    cascade = cv2.CascadeClassifier(str(cascade_path)) if cascade_path else None
+    eye_cascade = cv2.CascadeClassifier(str(eye_cascade_path)) if eye_cascade_path else None
+    if not has_yunet and (cascade is None or cascade.empty()):
+        log_event("face_detect_unavailable", {"reason": "cascade load failed", "cascade": str(cascade_path)})
+        with FACE_CROP_LOCK:
+            FACE_CROP_CACHE[cache_key] = None
+        return None
+
+    duration = media_duration(video)
+    sample_times = sorted({max(0.1, min(duration - 0.1, duration * ratio)) for ratio in [0.08, 0.18, 0.32, 0.5, 0.68]})
+    frame_dir = ascii_temp_dir("face_frames")
+    detections = []
+
+    for sample_index, sample_time in enumerate(sample_times, start=1):
+        frame_path = frame_dir / f"{uuid.uuid4().hex}_{sample_index}.jpg"
+        try:
+            if not extract_face_frame(video, sample_time, frame_path):
+                continue
+            frame = cv2.imread(str(frame_path))
+            if frame is None:
+                continue
+            frame_height, frame_width = frame.shape[:2]
+            if has_yunet:
+                try:
+                    detector = cv2.FaceDetectorYN_create(str(yunet_path), "", (frame_width, frame_height), 0.65, 0.3, 5000)
+                    _, faces = detector.detect(frame)
+                    if faces is not None:
+                        for face in faces:
+                            x, y, w, h = [int(round(value)) for value in face[:4]]
+                            confidence = float(face[-1])
+                            if w <= 0 or h <= 0:
+                                continue
+                            aspect = w / max(1, h)
+                            if aspect < 0.58 or aspect > 1.45:
+                                continue
+                            detections.append(
+                                {
+                                    "x": max(0, x),
+                                    "y": max(0, y),
+                                    "w": min(w, frame_width),
+                                    "h": min(h, frame_height),
+                                    "score": int(w * h * max(1.0, confidence * 2)),
+                                    "confidence": round(confidence, 4),
+                                    "method": "yunet",
+                                    "frameWidth": int(frame_width),
+                                    "frameHeight": int(frame_height),
+                                    "sampleTime": round(sample_time, 3),
+                                }
+                            )
+                        if faces is not None and len(faces):
+                            continue
+                except Exception as exc:
+                    log_event("face_detect_yunet_error", {"error": f"{type(exc).__name__}: {exc}", "model": str(yunet_path)})
+                    has_yunet = False
+
+            if cascade is None or cascade.empty():
+                continue
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.equalizeHist(gray)
+            faces = cascade.detectMultiScale(
+                gray,
+                scaleFactor=1.06,
+                minNeighbors=4,
+                minSize=(max(42, frame_width // 14), max(42, frame_height // 14)),
+            )
+            for x, y, w, h in faces:
+                roi = gray[y : y + max(1, int(h * 0.68)), x : x + w]
+                eyes = []
+                if eye_cascade is not None and not eye_cascade.empty() and roi.size:
+                    eyes = eye_cascade.detectMultiScale(
+                        roi,
+                        scaleFactor=1.08,
+                        minNeighbors=3,
+                        minSize=(max(12, w // 8), max(8, h // 12)),
+                    )
+                eye_count = len(eyes)
+                if eye_count < 1:
+                    continue
+                score = int(w * h * (1 + min(eye_count, 2) * 0.35))
+                detections.append(
+                    {
+                        "x": int(x),
+                        "y": int(y),
+                        "w": int(w),
+                        "h": int(h),
+                        "score": score,
+                        "eyes": int(eye_count),
+                        "frameWidth": int(frame_width),
+                        "frameHeight": int(frame_height),
+                        "sampleTime": round(sample_time, 3),
+                    }
+                )
+        finally:
+            try:
+                frame_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    if not detections:
+        log_event("face_detect_none", {"video": inspect_path(video), "sampleTimes": sample_times})
+        with FACE_CROP_LOCK:
+            FACE_CROP_CACHE[cache_key] = None
+        return None
+
+    best = max(detections, key=lambda item: item["score"])
+    frame_width = best["frameWidth"]
+    frame_height = best["frameHeight"]
+    face_cx = best["x"] + best["w"] / 2
+    face_cy = best["y"] + best["h"] * 0.56
+    crop_size = int(max(best["w"] * 2.05, best["h"] * 1.72, min(frame_width, frame_height) * 0.30))
+    crop_size = max(80, min(crop_size, frame_width, frame_height))
+    crop_x = int(round(face_cx - crop_size / 2))
+    crop_y = int(round(face_cy - crop_size / 2))
+    crop_x = max(0, min(crop_x, frame_width - crop_size))
+    crop_y = max(0, min(crop_y, frame_height - crop_size))
+    crop = {
+        "x": crop_x,
+        "y": crop_y,
+        "size": crop_size,
+        "face": best,
+        "detections": len(detections),
+    }
+    log_event("face_detect_done", {"video": inspect_path(video), "crop": crop})
+
+    with FACE_CROP_LOCK:
+        FACE_CROP_CACHE[cache_key] = crop
+    return crop
+
+
 def ratio_size(ratio: str) -> tuple[int, int]:
     if ratio.startswith("1:1"):
         return 720, 720
@@ -495,29 +730,29 @@ def render_mix_segment(background: Path, talking: Path, out: Path, ratio: str) -
     pip_scale = pip_size + max(70, int(pip_size * 0.48))
     if pip_scale % 2:
         pip_scale += 1
-    subtitle_height = max(90, int(height * 0.12))
-    if subtitle_height % 2:
-        subtitle_height += 1
     margin = max(28, int(width * 0.075))
     pip_top = max(96, int(height * 0.22))
     bg_filter = ffmpeg_cover_filter(width, height)
+    face_crop = detect_face_crop(talking)
+    if face_crop:
+        pip_source_filter = (
+            f"[1:v]crop={face_crop['size']}:{face_crop['size']}:{face_crop['x']}:{face_crop['y']},"
+            f"scale={pip_size}:{pip_size},format=rgba,"
+        )
+    else:
+        pip_source_filter = (
+            f"[1:v]scale={pip_scale}:{pip_scale}:force_original_aspect_ratio=increase,"
+            f"crop={pip_size}:{pip_size}:(iw-ow)/2:(ih-oh)*0.20,format=rgba,"
+        )
     circle_mask = (
-        f"[pipsrc]scale={pip_scale}:{pip_scale}:force_original_aspect_ratio=increase,"
-        f"crop={pip_size}:{pip_size}:(iw-ow)/2:(ih-oh)*0.20,format=rgba,"
+        f"{pip_source_filter}"
         "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':"
         "a='if(lte((X-W/2)*(X-W/2)+(Y-H/2)*(Y-H/2),(W/2)*(W/2)),255,0)'[pip]"
     )
-    subtitle_strip = (
-        f"[subsrc]scale={width}:{height}:force_original_aspect_ratio=increase,"
-        f"crop={width}:{height},crop={width}:{subtitle_height}:0:{height - subtitle_height},format=rgba[sub]"
-    )
     filter_complex = (
         f"[0:v]{bg_filter}[bg];"
-        "[1:v]split=2[pipsrc][subsrc];"
-        f"{subtitle_strip};"
         f"{circle_mask};"
-        "[bg][sub]overlay=0:H-h:format=auto[withsub];"
-        f"[withsub][pip]overlay=W-w-{margin}:{pip_top}:format=auto,format=yuv420p[v]"
+        f"[bg][pip]overlay=W-w-{margin}:{pip_top}:format=auto,format=yuv420p[v]"
     )
     out.parent.mkdir(parents=True, exist_ok=True)
 
